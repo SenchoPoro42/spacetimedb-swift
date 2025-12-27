@@ -17,16 +17,45 @@ let package = Package(
             name: "SpacetimeDB",
             targets: ["SpacetimeDB"]
         ),
+        .library(
+            name: "SpacetimeDBCodegenLib",
+            targets: ["SpacetimeDBCodegenLib"]
+        ),
+        .executable(
+            name: "spacetimedb-codegen",
+            targets: ["SpacetimeDBCodegen"]
+        ),
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.3.0"),
     ],
     targets: [
         .target(
             name: "SpacetimeDB",
             path: "Sources/SpacetimeDB"
         ),
+        .target(
+            name: "SpacetimeDBCodegenLib",
+            dependencies: [],
+            path: "Sources/SpacetimeDBCodegenLib"
+        ),
+        .executableTarget(
+            name: "SpacetimeDBCodegen",
+            dependencies: [
+                "SpacetimeDBCodegenLib",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            path: "Sources/SpacetimeDBCodegen"
+        ),
         .testTarget(
             name: "SpacetimeDBTests",
             dependencies: ["SpacetimeDB"],
             path: "Tests/SpacetimeDBTests"
+        ),
+        .testTarget(
+            name: "SpacetimeDBCodegenTests",
+            dependencies: ["SpacetimeDBCodegenLib"],
+            path: "Tests/SpacetimeDBCodegenTests"
         ),
     ]
 )

@@ -86,7 +86,7 @@ let users = connection.db.users.iter()
 - [x] WebSocket transport
 - [x] Client cache
 - [x] Connection manager
-- [ ] Code generator
+- [x] Code generator
 
 ## License
 
