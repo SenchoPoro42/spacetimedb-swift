@@ -115,7 +115,7 @@ public final class TableCache: @unchecked Sendable {
     /// - Returns: The old row data if this was an update, nil if new insert.
     @discardableResult
     public func insert(_ rowData: Data) -> Data? {
-        let key = extractKey(from: rowData)
+        let key = extractPrimaryKey(from: rowData)
         let oldValue = rows[key]
         rows[key] = rowData
         return oldValue
@@ -127,7 +127,7 @@ public final class TableCache: @unchecked Sendable {
     /// - Returns: True if the row was found and deleted.
     @discardableResult
     public func delete(_ rowData: Data) -> Bool {
-        let key = extractKey(from: rowData)
+        let key = extractPrimaryKey(from: rowData)
         return rows.removeValue(forKey: key) != nil
     }
     
@@ -166,15 +166,21 @@ public final class TableCache: @unchecked Sendable {
     @discardableResult
     public func deleteBatch(_ rowsData: [Data]) -> [Data] {
         rowsData.compactMap { rowData in
-            let key = extractKey(from: rowData)
+            let key = extractPrimaryKey(from: rowData)
             return rows.removeValue(forKey: key)
         }
     }
     
-    // MARK: - Private
+    // MARK: - Key Extraction
     
-    /// Extract the key for a row.
-    private func extractKey(from rowData: Data) -> Data {
+    /// Extract the primary key from row data.
+    ///
+    /// Uses the registered primary key extractor if available,
+    /// otherwise returns the entire row data as the key.
+    ///
+    /// - Parameter rowData: The BSATN-encoded row data.
+    /// - Returns: The primary key bytes.
+    public func extractPrimaryKey(from rowData: Data) -> Data {
         if let extractor = primaryKeyExtractor {
             return extractor.extractKey(from: rowData)
         }

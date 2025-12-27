@@ -131,31 +131,70 @@ public actor ClientCache {
     
     /// Apply a query update to a specific table.
     ///
+    /// This method properly detects row updates by pre-scanning deletes and inserts
+    /// to find matching primary keys. When a delete and insert share the same PK
+    /// within a single QueryUpdate, it's treated as an update rather than separate
+    /// delete + insert operations.
+    ///
     /// - Parameters:
     ///   - update: The query update containing deletes and inserts.
     ///   - tableName: The name of the table.
     ///   - tableCache: The table cache to update.
     private func applyQueryUpdate(_ update: QueryUpdate, tableName: String, tableCache: TableCache) {
-        // Process deletes first
+        // Build PK → rowData maps for both deletes and inserts
+        var deletePKs: [Data: Data] = [:]
         for rowData in update.deletes {
-            let deleted = tableCache.delete(rowData)
-            if deleted {
-                stats.totalDeletes += 1
-                callbacks.notifyDelete(tableName: tableName, rowData: rowData)
+            let pk = tableCache.extractPrimaryKey(from: rowData)
+            deletePKs[pk] = rowData
+        }
+        
+        var insertPKs: [Data: Data] = [:]
+        for rowData in update.inserts {
+            let pk = tableCache.extractPrimaryKey(from: rowData)
+            insertPKs[pk] = rowData
+        }
+        
+        // Find matching PKs (these are updates)
+        let updatePKs = Set(deletePKs.keys).intersection(Set(insertPKs.keys))
+        
+        // Process pure deletes (PK not in inserts)
+        for (pk, rowData) in deletePKs {
+            if !updatePKs.contains(pk) {
+                let deleted = tableCache.delete(rowData)
+                if deleted {
+                    stats.totalDeletes += 1
+                    callbacks.notifyDelete(tableName: tableName, rowData: rowData)
+                }
             }
         }
         
-        // Process inserts
-        for rowData in update.inserts {
-            let replaced = tableCache.insert(rowData)
-            stats.totalInserts += 1
+        // Process updates (PK in both deletes and inserts)
+        for pk in updatePKs {
+            let oldData = deletePKs[pk]!
+            let newData = insertPKs[pk]!
             
-            if let oldData = replaced {
-                // This was an update (same PK, different data)
-                stats.totalUpdates += 1
-                callbacks.notifyUpdate(tableName: tableName, oldData: oldData, newData: rowData)
-            } else {
-                callbacks.notifyInsert(tableName: tableName, rowData: rowData)
+            // Remove old, insert new
+            tableCache.delete(oldData)
+            tableCache.insert(newData)
+            
+            stats.totalUpdates += 1
+            callbacks.notifyUpdate(tableName: tableName, oldData: oldData, newData: newData)
+        }
+        
+        // Process pure inserts (PK not in deletes)
+        for (pk, rowData) in insertPKs {
+            if !updatePKs.contains(pk) {
+                let replaced = tableCache.insert(rowData)
+                stats.totalInserts += 1
+                
+                if let oldData = replaced {
+                    // Row existed in cache but wasn't in this QueryUpdate's deletes
+                    // This can happen with overlapping subscriptions - treat as update
+                    stats.totalUpdates += 1
+                    callbacks.notifyUpdate(tableName: tableName, oldData: oldData, newData: rowData)
+                } else {
+                    callbacks.notifyInsert(tableName: tableName, rowData: rowData)
+                }
             }
         }
     }
