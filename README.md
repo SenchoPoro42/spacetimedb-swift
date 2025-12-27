@@ -124,7 +124,7 @@ let connection = try await SpacetimeDBConnection.builder()
     // Optional: Custom configuration
     .withConfiguration(TransportConfiguration(
         maxReconnectAttempts: 5,
-        enableCompression: true
+        reconnectDelay: 2.0
     ))
     
     // Optional: Callbacks
@@ -252,26 +252,33 @@ let result = try await connection.callReducer("my_reducer", args: encoder.data)
 
 ### Row Callbacks
 
-Get notified when rows change:
+Get notified when rows change via `ClientCache`:
 
 ```swift
-let table = await connection.db.table(named: "users")
+let db = await connection.db
 
-// Register callbacks
-table.onInsert { rowData in
+// Called on row insert
+db.onInsert(tableName: "users") { tableName, rowData in
     let user = try? BSATNDecoder.decode(User.self, from: rowData)
     print("User inserted: \(user?.name ?? "unknown")")
 }
 
-table.onDelete { rowData in
+// Called on row delete
+db.onDelete(tableName: "users") { tableName, rowData in
     let user = try? BSATNDecoder.decode(User.self, from: rowData)
     print("User deleted: \(user?.name ?? "unknown")")
 }
 
-table.onUpdate { oldData, newData in
-    let oldUser = try? BSATNDecoder.decode(User.self, from: oldData)
-    let newUser = try? BSATNDecoder.decode(User.self, from: newData)
-    print("User updated: \(oldUser?.name ?? "") → \(newUser?.name ?? "")")
+// Called on any change (handles inserts, deletes, and updates)
+db.onChange(tableName: "users") { tableName, operation in
+    switch operation {
+    case .insert(let data):
+        print("Insert")
+    case .delete(let data):
+        print("Delete")
+    case .update(let oldData, let newData):
+        print("Update")
+    }
 }
 ```
 
@@ -428,6 +435,16 @@ fi
 | `subscriptionBuilder()` | Create a `SubscriptionBuilder` |
 | `callReducer(_:args:)` | Call a server-side reducer |
 
+### TransportConfiguration
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `pingInterval` | `TimeInterval?` | `30.0` | Keep-alive ping interval |
+| `connectionTimeout` | `TimeInterval` | `10.0` | Connection timeout |
+| `maxReconnectAttempts` | `Int` | `3` | Max reconnection attempts |
+| `reconnectDelay` | `TimeInterval` | `1.0` | Base delay between reconnects |
+| `maxReconnectDelay` | `TimeInterval` | `30.0` | Max delay with backoff |
+
 ### ConnectionBuilder
 
 | Method | Description |
@@ -448,12 +465,17 @@ fi
 | Method | Description |
 |--------|-------------|
 | `table(named:)` | Get a `TableCache` by name |
-| `iter()` | Iterate all rows |
+| `onInsert(tableName:_:)` | Register insert callback |
+| `onDelete(tableName:_:)` | Register delete callback |
+| `onChange(tableName:_:)` | Register change callback |
+
+### TableCache
+
+| Method | Description |
+|--------|-------------|
+| `iter()` | Iterate all rows (returns `AnySequence<Data>`) |
 | `count` | Number of rows |
 | `find(byPrimaryKey:)` | Find row by primary key |
-| `onInsert(_:)` | Register insert callback |
-| `onDelete(_:)` | Register delete callback |
-| `onUpdate(_:)` | Register update callback |
 
 ### BSATN
 
@@ -505,6 +527,8 @@ do {
 - `.notConnected` — Operation requires active connection
 - `.builderMissingConfiguration(field:)` — Required builder field missing
 - `.reducerTimeout(reducerName:timeoutSeconds:)` — Reducer call timed out
+- `.reducerCallFailed(reducerName:message:)` — Reducer returned an error
+- `.reducerOutOfEnergy(reducerName:)` — Reducer ran out of energy
 - `.subscriptionFailed(message:)` — Subscription query failed
 - `.reconnectFailed(attempts:)` — All reconnection attempts exhausted
 - `.cancelled` — Operation was cancelled

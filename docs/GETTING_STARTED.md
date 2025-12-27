@@ -260,28 +260,34 @@ for rowData in userTable.iter() {
 
 ### Reacting to Changes
 
+Callbacks are registered through `ClientCache` with the table name:
+
 ```swift
-let userTable = await connection.db.table(named: "user")
+let db = await connection.db
 
 // Called when a new row is inserted
-userTable.onInsert { rowData in
+db.onInsert(tableName: "user") { tableName, rowData in
     if let user = try? BSATNDecoder.decode(User.self, from: rowData) {
         print("New user: \(user.name)")
     }
 }
 
 // Called when a row is deleted
-userTable.onDelete { rowData in
+db.onDelete(tableName: "user") { tableName, rowData in
     if let user = try? BSATNDecoder.decode(User.self, from: rowData) {
         print("User deleted: \(user.name)")
     }
 }
 
-// Called when a row is updated
-userTable.onUpdate { oldData, newData in
-    if let oldUser = try? BSATNDecoder.decode(User.self, from: oldData),
-       let newUser = try? BSATNDecoder.decode(User.self, from: newData) {
-        print("User updated: \(oldUser.name) → \(newUser.name)")
+// Called on any change (insert, delete, or update)
+db.onChange(tableName: "user") { tableName, operation in
+    switch operation {
+    case .insert(let data):
+        print("Inserted row")
+    case .delete(let data):
+        print("Deleted row")
+    case .update(let oldData, let newData):
+        print("Updated row")
     }
 }
 ```

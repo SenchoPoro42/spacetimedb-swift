@@ -284,16 +284,26 @@ public struct TransportConfiguration: Sendable
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `maxReconnectAttempts` | `Int` | `5` | Max reconnection attempts |
-| `initialReconnectDelay` | `TimeInterval` | `1.0` | First reconnect delay |
-| `maxReconnectDelay` | `TimeInterval` | `30.0` | Maximum delay between attempts |
-| `enableCompression` | `Bool` | `true` | Enable WebSocket compression |
+| `pingInterval` | `TimeInterval?` | `30.0` | Keep-alive ping interval (nil to disable) |
+| `connectionTimeout` | `TimeInterval` | `10.0` | Timeout for establishing connection |
+| `maxReconnectAttempts` | `Int` | `3` | Max reconnection attempts (0 to disable) |
+| `reconnectDelay` | `TimeInterval` | `1.0` | Base delay between reconnects |
+| `maxReconnectDelay` | `TimeInterval` | `30.0` | Maximum delay with exponential backoff |
 
 #### Static Properties
 
 ```swift
 public static let `default`: TransportConfiguration
+public static let noReconnect: TransportConfiguration  // maxReconnectAttempts: 0
 ```
+
+#### Methods
+
+```swift
+public func delayForAttempt(_ attempt: Int) -> TimeInterval
+```
+
+Calculates reconnection delay with exponential backoff.
 
 ---
 
@@ -304,7 +314,7 @@ public static let `default`: TransportConfiguration
 Builder for creating subscriptions with advanced options.
 
 ```swift
-public struct SubscriptionBuilder
+public final class SubscriptionBuilder: @unchecked Sendable
 ```
 
 #### Methods
@@ -382,15 +392,17 @@ public func table(named name: String) -> TableCache
 Cache for a single table's rows.
 
 ```swift
-public final class TableCache
+public final class TableCache: @unchecked Sendable
 ```
 
 #### Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `count` | `Int` | Number of cached rows |
 | `tableName` | `String` | Name of the table |
+| `tableId` | `TableId?` | Server-assigned table ID |
+| `count` | `Int` | Number of cached rows |
+| `isEmpty` | `Bool` | Whether the cache is empty |
 
 #### Methods
 
@@ -399,49 +411,41 @@ public final class TableCache
 Iterate all cached rows.
 
 ```swift
-public func iter() -> [Data]
+public func iter() -> AnySequence<Data>
 ```
 
-**Returns:** Array of BSATN-encoded row data.
+**Returns:** Sequence of BSATN-encoded row data.
+
+##### `allRows()`
+
+Get all rows as an array.
+
+```swift
+public func allRows() -> [Data]
+```
 
 ##### `find(byPrimaryKey:)`
 
 Find a row by its primary key.
 
 ```swift
-public func find(byPrimaryKey key: Data) -> Data?
+public func find(byPrimaryKey primaryKey: Data) -> Data?
 ```
 
 **Parameters:**
-- `key` — BSATN-encoded primary key
+- `primaryKey` — BSATN-encoded primary key bytes
 
 **Returns:** Row data if found, nil otherwise.
 
-##### `onInsert(_:)`
+##### `contains(primaryKey:)`
 
-Register a callback for row insertions.
-
-```swift
-public func onInsert(_ callback: @escaping @Sendable (Data) -> Void)
-```
-
-##### `onDelete(_:)`
-
-Register a callback for row deletions.
+Check if a row with the given primary key exists.
 
 ```swift
-public func onDelete(_ callback: @escaping @Sendable (Data) -> Void)
+public func contains(primaryKey: Data) -> Bool
 ```
 
-##### `onUpdate(_:)`
-
-Register a callback for row updates.
-
-```swift
-public func onUpdate(_ callback: @escaping @Sendable (Data, Data) -> Void)
-```
-
-**Parameters:** Callback receives (old row data, new row data).
+**Note:** Row callbacks (`onInsert`, `onDelete`, `onChange`) are registered through `ClientCache`, not `TableCache` directly. See `ClientCache.onInsert(tableName:_:)` etc.
 
 ---
 
@@ -463,8 +467,10 @@ public struct ReducerResult: Sendable
 | `requestId` | `UInt32` | Request ID |
 | `status` | `Status` | Result status |
 | `timestamp` | `Timestamp` | Server timestamp |
-| `energyUsed` | `Int64` | Energy consumed |
+| `energyUsed` | `EnergyQuanta` | Energy consumed (128-bit) |
 | `executionDuration` | `TimeDuration` | Server execution time |
+| `isSuccess` | `Bool` | Whether reducer succeeded |
+| `errorMessage` | `String?` | Error message if failed |
 
 #### Status Enum
 
@@ -483,15 +489,15 @@ public enum Status: Sendable {
 Flags for reducer calls.
 
 ```swift
-public struct CallReducerFlags: OptionSet, Sendable
+public enum CallReducerFlags: UInt8, Sendable
 ```
 
-#### Options
+#### Cases
 
-| Flag | Description |
-|------|-------------|
-| `.fullUpdate` | Request full transaction update |
-| `.noSuccessResponse` | Suppress success response |
+| Case | Raw Value | Description |
+|------|-----------|-------------|
+| `.fullUpdate` | `0` | Receive notification on completion (default) |
+| `.noSuccessNotify` | `1` | Don't notify on success unless subscribed |
 
 ---
 
@@ -599,7 +605,7 @@ The following types conform to `BSATNCodable`:
 
 ### Identity
 
-A SpacetimeDB user identity (256-bit).
+A SpacetimeDB user identity (256-bit, backed by `UInt256`).
 
 ```swift
 public struct Identity: BSATNCodable, Equatable, Hashable, Sendable
@@ -609,28 +615,32 @@ public struct Identity: BSATNCodable, Equatable, Hashable, Sendable
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `bytes` | `[UInt8]` | Raw 32-byte identity |
+| `hexString` | `String` | 64-character hex representation |
+| `shortHexString` | `String` | First 16 characters for display |
+| `littleEndianBytes` | `Data` | Raw bytes in BSATN order |
+| `bigEndianBytes` | `Data` | Raw bytes in display order |
+| `isZero` | `Bool` | Whether this is the zero identity |
 
 #### Initializers
 
 ```swift
-public init(bytes: [UInt8])
-public init(hexString: String) throws
+public init(_ value: UInt256)
+public init?(hexString: String)  // Returns nil if invalid
+public init(littleEndianBytes bytes: Data)
+public init(bigEndianBytes bytes: Data)
 ```
 
-#### Methods
-
-##### `toHexString()`
+#### Static Properties
 
 ```swift
-public func toHexString() -> String
+public static var zero: Identity
 ```
 
 ---
 
 ### ConnectionId
 
-A connection identifier (128-bit).
+A connection identifier (64-bit).
 
 ```swift
 public struct ConnectionId: BSATNCodable, Equatable, Hashable, Sendable
@@ -640,13 +650,26 @@ public struct ConnectionId: BSATNCodable, Equatable, Hashable, Sendable
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `bytes` | `[UInt8]` | Raw 16-byte ID |
+| `value` | `UInt64` | The connection ID value |
+| `isZero` | `Bool` | Whether this is zero |
+
+#### Initializers
+
+```swift
+public init(_ value: UInt64)
+```
+
+#### Static Properties
+
+```swift
+public static var zero: ConnectionId
+```
 
 ---
 
 ### Timestamp
 
-A SpacetimeDB timestamp (microseconds since epoch).
+A SpacetimeDB timestamp (microseconds since Unix epoch).
 
 ```swift
 public struct Timestamp: BSATNCodable, Equatable, Hashable, Comparable, Sendable
@@ -656,13 +679,22 @@ public struct Timestamp: BSATNCodable, Equatable, Hashable, Comparable, Sendable
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `microseconds` | `Int64` | Microseconds since Unix epoch |
+| `microseconds` | `UInt64` | Microseconds since Unix epoch |
+| `milliseconds` | `UInt64` | Milliseconds since epoch |
+| `secondsSinceEpoch` | `Double` | Seconds with microsecond precision |
 
 #### Initializers
 
 ```swift
-public init(microseconds: Int64)
-public init(date: Date)
+public init(microseconds: UInt64)
+public init(_ date: Date)
+```
+
+#### Static Properties
+
+```swift
+public static var now: Timestamp
+public static var epoch: Timestamp
 ```
 
 #### Methods
@@ -706,14 +738,16 @@ public enum ConnectionError: Error
 
 | Case | Description |
 |------|-------------|
-| `.connectionFailed(underlying: Error)` | WebSocket connection failed |
 | `.notConnected` | Operation requires active connection |
-| `.builderMissingConfiguration(field: String)` | Required builder field missing |
-| `.reducerTimeout(reducerName: String, timeoutSeconds: TimeInterval)` | Reducer call timed out |
-| `.subscriptionFailed(message: String)` | Subscription query failed |
+| `.connectionFailed(underlying: Error)` | WebSocket connection failed |
 | `.reconnectFailed(attempts: Int)` | All reconnection attempts exhausted |
-| `.cancelled` | Operation was cancelled |
+| `.reducerCallFailed(reducerName: String, message: String)` | Reducer returned an error |
+| `.reducerTimeout(reducerName: String, timeoutSeconds: TimeInterval)` | Reducer call timed out |
+| `.reducerOutOfEnergy(reducerName: String)` | Reducer ran out of energy |
+| `.subscriptionFailed(message: String)` | Subscription query failed |
+| `.builderMissingConfiguration(field: String)` | Required builder field missing |
 | `.connectionClosed(reason: String?)` | Connection closed unexpectedly |
+| `.cancelled` | Operation was cancelled |
 
 #### Example
 
@@ -760,7 +794,7 @@ let connection = try await SpacetimeDBConnection.builder()
     .withModuleName("my_module")
     .withConfiguration(TransportConfiguration(
         maxReconnectAttempts: 10,
-        enableCompression: true
+        reconnectDelay: 2.0
     ))
     .onConnect { conn, identity, token in
         print("Connected as: \(identity.toHexString())")
