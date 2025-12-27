@@ -82,9 +82,9 @@ let users = connection.db.users.iter()
 ### Roadmap
 
 - [x] BSATN encoder/decoder
-- [ ] Protocol messages (ClientMessage, ServerMessage)
-- [ ] WebSocket transport
-- [ ] Client cache
+- [x] Protocol messages (ClientMessage, ServerMessage)
+- [x] WebSocket transport
+- [x] Client cache
 - [ ] Connection manager
 - [ ] Code generator
 
